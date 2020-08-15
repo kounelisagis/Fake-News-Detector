@@ -1,79 +1,92 @@
 from collections import defaultdict 
 import requests
-import json
 from bs4 import BeautifulSoup
-from newspaper import Article
+import re
+import string
 import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from urllib.parse import urljoin
 
 
-def get_papers():
-    """Collects the top 10 papers of the last month.
-    Returns a list of tuples which contains pairs of dois and urls.
-    """
+def get_keywords(url_end):
+    '''Collects the titles of the news that mention the paper given.
+    Returns a frequency dictionary of the words that constitute the tiles.
+    '''
 
-    papers = []
+    keywords = defaultdict(int)
 
-    r = requests.get(url='https://api.altmetric.com/v1/citations/1m?num_results=10')
+    # get the altmetric details url
+    api_url = 'https://api.altmetric.com/v1/doi/10.15585/mmwr.'
+    r = requests.get(url = api_url + url_end)
     data = r.json()
 
-    for paper in data['results']:
+    # get html of news page
+    url = data['details_url'].replace('.php?citation_id=', '/') + '/news'
+    url = url.replace('www', 'cdc')
+    r = requests.get(url)
+    soup = BeautifulSoup(r.content, 'lxml')
+
+    for paragraph in soup.find_all('article'):
         try:
-            papers.append( (paper['doi'], paper['details_url'], ) )
+            title = paragraph.find('a').find('h3').text
+
+            # split into words
+            tokens = word_tokenize(title)
+            # convert to lower case
+            tokens = [w.lower() for w in tokens]
+            # remove punctuation from each word
+            table = str.maketrans('', '', string.punctuation)
+            stripped = [w.translate(table) for w in tokens]
+            # remove remaining tokens that are not alphabetic
+            words = [word for word in stripped if word.isalpha()]
+            # filter out stop words
+            stop_words = set(stopwords.words('english'))
+            words = [w for w in words if not w in stop_words]
+
+            for w in words:
+                keywords[w] += 1
         except:
             pass
 
-    return papers
+    return keywords
 
 
 
-def get_news_urls(url):
-    """Collects the news that mention the paper given.
-    Url argument is in the form of the Altmetric API repsonse object.
-    Returns a list of the news urls.
-    """
+def get_cdc_mmwr_papers(url):
+    '''Collects the papers included in a CDC Morbidity and Mortality Weekly Report.
+    Returns a dictionary of tiles and links.
+    '''
 
-    urls = []
-
-    url = url.replace('.php?citation_id=', '/')
-    url += '/news'
+    papers = []
 
     r = requests.get(url)
     soup = BeautifulSoup(r.content, 'lxml')
 
+    content_div = soup.find_all('div', class_='syndicate')[1]
+    a_tags = content_div.find_all('a')
 
-    for paragraph in soup.find_all('article'):
+    for a_tag in a_tags:
+        text = a_tag.get_text()
+        link = urljoin('https://www.cdc.gov/', a_tag['href'])
+
+        new_paper = {'title': text, 'link': link}
+        papers.append(new_paper)
+
+    return papers
+
+
+if __name__ == '__main__':
+    nltk.download('stopwords')
+
+    papers = get_cdc_mmwr_papers('https://www.cdc.gov/mmwr/indss_2019.html')
+
+    for paper in papers:
         try:
-            urls.append(paragraph.find('a')['href'])
-        except:
+            url_end = re.search(r'/ss/(.*?).htm', paper['link']).group(1)
+            print('-----------------------------------')
+            print(paper['title'])
+            print(get_keywords(url_end))
+            print('-----------------------------------')
+        except:  # irrelevant link
             pass
-
-    return urls
-
-
-if __name__ == "__main__":
-
-    nltk.download('punkt')  # Required by newspaper3k
-
-
-    papersDict = defaultdict(list)
-
-    papers = get_papers()
-
-    for paper_doi, paper_url in papers:
-        news_urls = get_news_urls(paper_url)
-
-        for news_url in news_urls:
-            try:
-                article = Article(news_url)
-                article.download()
-                article.parse()
-                article.nlp()
-
-                new_article = {'url': news_url,'text': article.text, 'keywords': article.keywords}
-                papersDict[paper_doi].append(new_article)
-            except:
-                pass
-
-
-    with open('result.json', 'w') as fp:
-        json.dump(papersDict, fp)

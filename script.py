@@ -7,11 +7,13 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from urllib.parse import urljoin
+import os
+import pandas as pd
 
 
 def get_keywords(url_end):
     '''Collects the titles of the news that mention the paper given.
-    Returns a frequency dictionary of the words that constitute the tiles.
+    Returns a frequency Pandas Dataframe of the words that constitute the tiles.
     '''
 
     keywords = defaultdict(int)
@@ -19,6 +21,11 @@ def get_keywords(url_end):
     # get the altmetric details url
     api_url = 'https://api.altmetric.com/v1/doi/10.15585/mmwr.'
     r = requests.get(url = api_url + url_end)
+    if not r:  # check the second version
+        r = requests.get(url = api_url + 'ss.' + url_end[2:])
+        if not r:
+            return None
+
     data = r.json()
 
     # get html of news page
@@ -29,7 +36,7 @@ def get_keywords(url_end):
 
     for paragraph in soup.find_all('article'):
         try:
-            title = paragraph.find('a').find('h3').text
+            title = paragraph.find('h3').text
 
             # split into words
             tokens = word_tokenize(title)
@@ -46,11 +53,10 @@ def get_keywords(url_end):
 
             for w in words:
                 keywords[w] += 1
-        except:
-            pass
+        except Exception as e:
+            print(e)
 
-    return keywords
-
+    return pd.DataFrame.from_dict(keywords, orient='index', columns=['Appearances'])
 
 
 def get_cdc_mmwr_papers(url):
@@ -77,6 +83,7 @@ def get_cdc_mmwr_papers(url):
 
 
 if __name__ == '__main__':
+
     nltk.download('stopwords')
 
     papers = get_cdc_mmwr_papers('https://www.cdc.gov/mmwr/indss_2019.html')
@@ -86,7 +93,18 @@ if __name__ == '__main__':
             url_end = re.search(r'/ss/(.*?).htm', paper['link']).group(1)
             print('-----------------------------------')
             print(paper['title'])
-            print(get_keywords(url_end))
-            print('-----------------------------------')
-        except:  # irrelevant link
-            pass
+
+            df = get_keywords(url_end)
+            print(df.size)
+
+            if not df.empty:
+                df = df.nlargest(10, 'Appearances')
+
+                csv_dir = 'csvs/'
+                os.makedirs(os.path.dirname(csv_dir), exist_ok=True)
+
+                fullname = os.path.join(csv_dir, url_end + '.csv')
+                df.to_csv(fullname)
+
+        except Exception as e:  # irrelevant link
+            print(e)

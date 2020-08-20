@@ -10,6 +10,8 @@ from urllib.parse import urljoin
 import os
 import pandas as pd
 import spacy
+from fuzzywuzzy import fuzz
+
 
 nlp = spacy.load("en_core_web_lg")
 
@@ -18,8 +20,6 @@ def get_keywords(url_end):
     '''Collects the titles of the news that mention the paper given.
     Returns a frequency Pandas Dataframe of the words that constitute the tiles.
     '''
-
-    keywords = defaultdict(int)
 
     # get the altmetric details url
     api_url = 'https://api.altmetric.com/v1/doi/10.15585/mmwr.'
@@ -58,9 +58,20 @@ def get_keywords(url_end):
             # filter out stop words
             stop_words = set(stopwords.words('english'))
             words = [w for w in words if not w in stop_words]
+            
+            # count word appearances
+            keywords = defaultdict(int)
 
             for w in words:
                 keywords[w] += 1
+
+            # merge words (used for cases like plural)
+            for word1 in list(keywords):
+                for word2 in list(keywords):
+                    if word1 in keywords and word1 != word2 and fuzz.ratio(word1, word2) > 80:
+                        keywords[word1] += keywords[word2]
+                        del keywords[word2]
+
         except Exception as e:
             print(e)
 

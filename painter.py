@@ -24,7 +24,12 @@ if __name__ == '__main__':
 
     dfs_dict = get_dataframes_dict()
 
+    charts_dir = 'charts/'
+    os.makedirs(os.path.dirname(charts_dir), exist_ok=True)
+
     for key, value in dfs_dict.items():
         value.plot(kind='bar')
         plt.title(key)
+        plt.savefig(os.path.join(charts_dir, key + '.png'), bbox_inches='tight', dpi=100)
+
         plt.show()

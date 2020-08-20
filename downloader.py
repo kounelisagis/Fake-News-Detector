@@ -9,6 +9,9 @@ from nltk.tokenize import word_tokenize
 from urllib.parse import urljoin
 import os
 import pandas as pd
+import spacy
+
+nlp = spacy.load("en_core_web_lg")
 
 
 def get_keywords(url_end):
@@ -38,8 +41,13 @@ def get_keywords(url_end):
         try:
             title = paragraph.find('h3').text
 
-            # split into words
-            tokens = word_tokenize(title)
+            doc = nlp(title)
+            tokens = []
+
+            for chunk in doc.noun_chunks:
+                for word in chunk.text.split():
+                    tokens.append(word)
+
             # convert to lower case
             tokens = [w.lower() for w in tokens]
             # remove punctuation from each word
@@ -98,7 +106,7 @@ if __name__ == '__main__':
             print(df.size)
 
             if not df.empty:
-                df = df.nlargest(10, 'Appearances')
+                df = df.nlargest(15, 'Appearances')
 
                 csv_dir = 'csvs/'
                 os.makedirs(os.path.dirname(csv_dir), exist_ok=True)

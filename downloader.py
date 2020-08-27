@@ -16,10 +16,13 @@ from fuzzywuzzy import fuzz
 nlp = spacy.load("en_core_web_lg")
 
 
-def get_keywords(url_end):
+def get_keywords_and_links(url_end):
     '''Collects the titles of the news that mention the paper given.
-    Returns a frequency Pandas Dataframe of the words that constitute the tiles.
+    Returns a frequency Pandas Dataframe of the words that constitute the tiles and the urls of the news.
     '''
+
+    keywords = defaultdict(int)
+    links = []
 
     # get the altmetric details url
     api_url = 'https://api.altmetric.com/v1/doi/10.15585/mmwr.'
@@ -58,9 +61,6 @@ def get_keywords(url_end):
             # filter out stop words
             stop_words = set(stopwords.words('english'))
             words = [w for w in words if not w in stop_words]
-            
-            # count word appearances
-            keywords = defaultdict(int)
 
             for w in words:
                 keywords[w] += 1
@@ -74,8 +74,14 @@ def get_keywords(url_end):
 
         except Exception as e:
             print(e)
+        try:
+            link = paragraph.find('a')['href']
+            links.append(link)
+        except:
+            pass
 
-    return pd.DataFrame.from_dict(keywords, orient='index', columns=['Appearances'])
+
+    return pd.DataFrame.from_dict(keywords, orient='index', columns=['Appearances']), pd.DataFrame(links)
 
 
 def get_cdc_mmwr_papers(url):
@@ -113,17 +119,27 @@ if __name__ == '__main__':
             print('-----------------------------------')
             print(paper['title'])
 
-            df = get_keywords(url_end)
-            print(df.size)
+            keywords_df, links_df = get_keywords_and_links(url_end)
+            print(keywords_df.size)
 
-            if not df.empty:
-                df = df.nlargest(15, 'Appearances')
+            if not (keywords_df.empty or links_df.empty):
 
-                csv_dir = 'csvs/'
-                os.makedirs(os.path.dirname(csv_dir), exist_ok=True)
+                # save keywords csv file
+                keywords_df = keywords_df.nlargest(15, 'Appearances')
+                keywords_df.index.names = ['Keyword']
 
-                fullname = os.path.join(csv_dir, url_end + '.csv')
-                df.to_csv(fullname)
+                keywords_csv_dir = 'keywords_csvs/'
+                os.makedirs(os.path.dirname(keywords_csv_dir), exist_ok=True)
+
+                fullname = os.path.join(keywords_csv_dir, url_end + '.csv')
+                keywords_df.to_csv(fullname)
+
+                # save links csv file
+                links_csv_dir = 'links_csvs/'
+                os.makedirs(os.path.dirname(links_csv_dir), exist_ok=True)
+
+                fullname = os.path.join(links_csv_dir, url_end + '.csv')
+                links_df.to_csv(fullname, header = ['Link'], index = False)
 
         except Exception as e:  # irrelevant link
             print(e)

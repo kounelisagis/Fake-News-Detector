@@ -4,7 +4,7 @@ import os
 import re
 
 
-def get_dataframes_dict(csv_dir = 'csvs/'):
+def get_dataframes_dict(csv_dir = 'keywords_csvs/'):
     directory = os.fsencode(csv_dir)
 
     dfs = {}

@@ -7,6 +7,7 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from urllib.parse import urljoin
+from urllib.request import urlopen
 import os
 import pandas as pd
 import spacy
@@ -76,7 +77,7 @@ def get_keywords_and_links(url_end):
             print(e)
         try:
             link = paragraph.find('a')['href']
-            links.append(link)
+            links.append(urlopen(link, timeout = 1).geturl())
         except:
             pass
 

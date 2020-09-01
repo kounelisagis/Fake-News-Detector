@@ -7,14 +7,15 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from urllib.parse import urljoin
-from urllib.request import urlopen
 import os
 import pandas as pd
 import spacy
 from fuzzywuzzy import fuzz
+import multiprocessing
 
 
 nlp = spacy.load("en_core_web_lg")
+nltk.download('stopwords')
 
 
 def get_keywords_and_links(url_end):
@@ -77,10 +78,17 @@ def get_keywords_and_links(url_end):
             print(e)
         try:
             link = paragraph.find('a')['href']
-            links.append(urlopen(link, timeout = 1).geturl())
-        except:
-            pass
 
+            # find expanded url
+            session = requests.Session()
+            resp = session.head(link, allow_redirects=True, timeout=(10, 20), headers={'User-Agent': 'Mozilla/5.0'})
+
+            links.append(resp.url)
+        except Exception as e:
+            print(e)
+
+    # remove duplicates in links list
+    links = list(set(links))
 
     return pd.DataFrame.from_dict(keywords, orient='index', columns=['Appearances']), pd.DataFrame(links)
 
@@ -89,7 +97,6 @@ def get_cdc_mmwr_papers(url):
     '''Collects the papers included in a CDC Morbidity and Mortality Weekly Report.
     Returns a dictionary of tiles and links.
     '''
-
     papers = []
 
     r = requests.get(url)
@@ -108,39 +115,45 @@ def get_cdc_mmwr_papers(url):
     return papers
 
 
-if __name__ == '__main__':
+def paper_task(paper):
+    '''The function that every process executes.
+    Responsible for saving the csv files containing the desirable keywords and links.
+    '''
 
-    nltk.download('stopwords')
+    try:
+        url_end = re.search(r'/ss/(.*?).htm', paper['link']).group(1)
+        print('-----------------------------------')
+        print('-> {} | {}'.format(multiprocessing.current_process(), paper['title']))
+
+        keywords_df, links_df = get_keywords_and_links(url_end)
+        print(keywords_df.size)
+
+        if not (keywords_df.empty or links_df.empty):
+
+            # save keywords csv file
+            keywords_df = keywords_df.nlargest(10, 'Appearances')
+            keywords_df.index.names = ['Keyword']
+
+            keywords_csv_dir = 'keywords_csvs/'
+            os.makedirs(os.path.dirname(keywords_csv_dir), exist_ok=True)
+
+            fullname = os.path.join(keywords_csv_dir, url_end + '.csv')
+            keywords_df.to_csv(fullname)
+
+            # save links csv file
+            links_csv_dir = 'links_csvs/'
+            os.makedirs(os.path.dirname(links_csv_dir), exist_ok=True)
+
+            fullname = os.path.join(links_csv_dir, url_end + '.csv')
+            links_df.to_csv(fullname, header = ['Link'], index = False)
+
+    except Exception as e:
+        print(e)
+
+
+if __name__ == '__main__':
 
     papers = get_cdc_mmwr_papers('https://www.cdc.gov/mmwr/indss_2019.html')
 
-    for paper in papers:
-        try:
-            url_end = re.search(r'/ss/(.*?).htm', paper['link']).group(1)
-            print('-----------------------------------')
-            print(paper['title'])
-
-            keywords_df, links_df = get_keywords_and_links(url_end)
-            print(keywords_df.size)
-
-            if not (keywords_df.empty or links_df.empty):
-
-                # save keywords csv file
-                keywords_df = keywords_df.nlargest(15, 'Appearances')
-                keywords_df.index.names = ['Keyword']
-
-                keywords_csv_dir = 'keywords_csvs/'
-                os.makedirs(os.path.dirname(keywords_csv_dir), exist_ok=True)
-
-                fullname = os.path.join(keywords_csv_dir, url_end + '.csv')
-                keywords_df.to_csv(fullname)
-
-                # save links csv file
-                links_csv_dir = 'links_csvs/'
-                os.makedirs(os.path.dirname(links_csv_dir), exist_ok=True)
-
-                fullname = os.path.join(links_csv_dir, url_end + '.csv')
-                links_df.to_csv(fullname, header = ['Link'], index = False)
-
-        except Exception as e:  # irrelevant link
-            print(e)
+    with multiprocessing.Pool() as p:
+        p.map(paper_task, papers)

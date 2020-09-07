@@ -14,20 +14,28 @@ from fuzzywuzzy import fuzz
 import multiprocessing
 
 
-nlp = spacy.load("en_core_web_lg")
+nlp = spacy.load('en_core_web_lg')
 nltk.download('stopwords')
 
 
-def get_keywords_and_links(url_end):
+def get_keywords_and_links(url):
     '''Collects the titles of the news that mention the paper given.
     Returns a frequency Pandas Dataframe of the words that constitute the tiles and the urls of the news.
     '''
-
+    titles = []
     keywords = defaultdict(int)
-    links = []
+    links = [url]
+
+    # get the cdc title
+    r = requests.get(url = url)
+    soup = BeautifulSoup(r.content, 'lxml')
+    cdc_title = soup.find(class_='content').find('h1').text.strip()
+
 
     # get the altmetric details url
     api_url = 'https://api.altmetric.com/v1/doi/10.15585/mmwr.'
+    url_end = re.search(r'/ss/(.*?).htm', url).group(1)
+
     r = requests.get(url = api_url + url_end)
     if not r:  # check the second version
         r = requests.get(url = api_url + 'ss.' + url_end[2:])
@@ -36,16 +44,33 @@ def get_keywords_and_links(url_end):
 
     data = r.json()
 
-    # get html of news page
+
+    # get html of altmetric news page
     url = data['details_url'].replace('.php?citation_id=', '/') + '/news'
     url = url.replace('www', 'cdc')
     r = requests.get(url)
     soup = BeautifulSoup(r.content, 'lxml')
 
     for paragraph in soup.find_all('article'):
-        try:
-            title = paragraph.find('h3').text
+        titles.append(paragraph.find('h3').text)
+        try:  # a element may be missing
+            link = paragraph.find('a')['href']
 
+            # find expanded url
+            session = requests.Session()
+            resp = session.head(link, allow_redirects=True, timeout=(10, 20), headers={'User-Agent': 'Mozilla/5.0'})
+            links.append(resp.url)
+        except:
+            pass
+
+    # remove duplicates in links list
+    links = list(set(links))
+
+    # remove parameters from links
+    links = [link.split('?')[0] for link in links]
+
+    for title in titles + [cdc_title]:
+        try:
             doc = nlp(title)
             tokens = []
 
@@ -76,21 +101,9 @@ def get_keywords_and_links(url_end):
 
         except Exception as e:
             print(e)
-        try:
-            link = paragraph.find('a')['href']
 
-            # find expanded url
-            session = requests.Session()
-            resp = session.head(link, allow_redirects=True, timeout=(10, 20), headers={'User-Agent': 'Mozilla/5.0'})
 
-            links.append(resp.url)
-        except Exception as e:
-            print(e)
-
-    # remove duplicates in links list
-    links = list(set(links))
-
-    return pd.DataFrame.from_dict(keywords, orient='index', columns=['Appearances']), pd.DataFrame(links)
+    return url_end, pd.DataFrame.from_dict(keywords, orient='index', columns=['Appearances']), pd.DataFrame(links)
 
 
 def get_cdc_mmwr_papers(url):
@@ -121,14 +134,13 @@ def paper_task(paper):
     '''
 
     try:
-        url_end = re.search(r'/ss/(.*?).htm', paper['link']).group(1)
         print('-----------------------------------')
         print('-> {} | {}'.format(multiprocessing.current_process(), paper['title']))
 
-        keywords_df, links_df = get_keywords_and_links(url_end)
+        filename, keywords_df, links_df = get_keywords_and_links(paper['link'])
         print(keywords_df.size)
 
-        if not (keywords_df.empty or links_df.empty):
+        if not keywords_df.empty:
 
             # save keywords csv file
             keywords_df = keywords_df.nlargest(10, 'Appearances')
@@ -137,14 +149,14 @@ def paper_task(paper):
             keywords_csv_dir = 'keywords_csvs/'
             os.makedirs(os.path.dirname(keywords_csv_dir), exist_ok=True)
 
-            fullname = os.path.join(keywords_csv_dir, url_end + '.csv')
+            fullname = os.path.join(keywords_csv_dir, filename + '.csv')
             keywords_df.to_csv(fullname)
 
             # save links csv file
             links_csv_dir = 'links_csvs/'
             os.makedirs(os.path.dirname(links_csv_dir), exist_ok=True)
 
-            fullname = os.path.join(links_csv_dir, url_end + '.csv')
+            fullname = os.path.join(links_csv_dir, filename + '.csv')
             links_df.to_csv(fullname, header = ['Link'], index = False)
 
     except Exception as e:

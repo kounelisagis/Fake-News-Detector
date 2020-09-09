@@ -18,13 +18,14 @@ nlp = spacy.load('en_core_web_lg')
 nltk.download('stopwords')
 
 
-def get_keywords_and_links(url):
+def get_keywords_and_urls(url):
     '''Collects the titles of the news that mention the paper given.
     Returns a frequency Pandas Dataframe of the words that constitute the tiles and the urls of the news.
     '''
     titles = []
     keywords = defaultdict(int)
-    links = [url]
+
+    urls = [re.sub('https?://(www\.)?', '', url.split('?')[0].split('#')[0].strip('/'))]
 
     # get the cdc title
     r = requests.get(url = url)
@@ -54,20 +55,24 @@ def get_keywords_and_links(url):
     for paragraph in soup.find_all('article'):
         titles.append(paragraph.find('h3').text)
         try:  # a element may be missing
-            link = paragraph.find('a')['href']
+            url = paragraph.find('a')['href']
 
             # find expanded url
             session = requests.Session()
-            resp = session.head(link, allow_redirects=True, timeout=(10, 20), headers={'User-Agent': 'Mozilla/5.0'})
-            links.append(resp.url)
+            resp = session.head(url, allow_redirects=True, timeout=(10, 20), headers={'User-Agent': 'Mozilla/5.0'})
+
+            # remove parameters from urls
+            url = resp.url.split('?')[0].split('#')[0].strip('/')
+            url = re.sub('https?://(www\.)?', '', url)
+
+            urls.append(url)
         except:
             pass
 
-    # remove duplicates in links list
-    links = list(set(links))
 
-    # remove parameters from links
-    links = [link.split('?')[0] for link in links]
+    # remove duplicates in urls list
+    urls = list(set(urls))
+
 
     for title in titles + [cdc_title]:
         try:
@@ -103,12 +108,12 @@ def get_keywords_and_links(url):
             print(e)
 
 
-    return url_end, pd.DataFrame.from_dict(keywords, orient='index', columns=['Appearances']), pd.DataFrame(links)
+    return url_end, pd.DataFrame.from_dict(keywords, orient='index', columns=['Appearances']), pd.DataFrame(urls)
 
 
 def get_cdc_mmwr_papers(url):
     '''Collects the papers included in a CDC Morbidity and Mortality Weekly Report.
-    Returns a dictionary of tiles and links.
+    Returns a dictionary of tiles and urls.
     '''
     papers = []
 
@@ -120,9 +125,9 @@ def get_cdc_mmwr_papers(url):
 
     for a_tag in a_tags:
         text = a_tag.get_text()
-        link = urljoin('https://www.cdc.gov/', a_tag['href'])
+        url = urljoin('https://www.cdc.gov/', a_tag['href'])
 
-        new_paper = {'title': text, 'link': link}
+        new_paper = {'title': text, 'url': url}
         papers.append(new_paper)
 
     return papers
@@ -130,20 +135,20 @@ def get_cdc_mmwr_papers(url):
 
 def paper_task(paper):
     '''The function that every process executes.
-    Responsible for saving the csv files containing the desirable keywords and links.
+    Responsible for saving the csv files containing the desirable keywords and urls.
     '''
 
     try:
         print('-----------------------------------')
         print('-> {} | {}'.format(multiprocessing.current_process(), paper['title']))
 
-        filename, keywords_df, links_df = get_keywords_and_links(paper['link'])
+        filename, keywords_df, urls_df = get_keywords_and_urls(paper['url'])
         print(keywords_df.size)
 
         if not keywords_df.empty:
 
             # save keywords csv file
-            keywords_df = keywords_df.nlargest(10, 'Appearances')
+            keywords_df = keywords_df.nlargest(6, 'Appearances')
             keywords_df.index.names = ['Keyword']
 
             keywords_csv_dir = 'keywords_csvs/'
@@ -152,12 +157,12 @@ def paper_task(paper):
             fullname = os.path.join(keywords_csv_dir, filename + '.csv')
             keywords_df.to_csv(fullname)
 
-            # save links csv file
-            links_csv_dir = 'links_csvs/'
-            os.makedirs(os.path.dirname(links_csv_dir), exist_ok=True)
+            # save urls csv file
+            urls_csv_dir = 'urls_csvs/'
+            os.makedirs(os.path.dirname(urls_csv_dir), exist_ok=True)
 
-            fullname = os.path.join(links_csv_dir, filename + '.csv')
-            links_df.to_csv(fullname, header = ['Link'], index = False)
+            fullname = os.path.join(urls_csv_dir, filename + '.csv')
+            urls_df.to_csv(fullname, header = ['Url'], index = False)
 
     except Exception as e:
         print(e)

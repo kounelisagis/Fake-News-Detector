@@ -1,6 +1,10 @@
 import os, json, re
 import requests
 import pandas as pd
+from bs4 import BeautifulSoup
+import newspaper
+from urllib.parse import urljoin
+
 
 BASE_URL = 'http://epfl.elasticsearch.spinn3r.com/content*/_search'
 BULK_SIZE = 1000
@@ -13,26 +17,30 @@ HEADERS = {
 }
 
 
-def make_a_query(text, percentage=60):
-    print(text)
+def make_a_query(query_text, news_urls, percentage=60):
+    '''Receives the tweets that correspond to the query text.
+    This function is responsible for finding the matches with the urls provided.
+    '''
+
+    print(query_text)
 
     query = {
-        "size": BULK_SIZE,
-        "query": {
-            "bool": {
-                "must": [
+        'size': BULK_SIZE,
+        'query': {
+            'bool': {
+                'must': [
                     {
-                        "more_like_this": {
-                            "fields": ["main"],
-                            "like_text": text,
-                            "min_term_freq": 1,
-                            "max_query_terms": 250,
-                            "minimum_should_match": "4<" + str(percentage) + "%",  # if the number of tokens is less than 4 they are all required
+                        'more_like_this': {
+                            'fields': ['main'],
+                            'like_text': query_text,
+                            'min_term_freq': 1,
+                            'max_query_terms': 250,
+                            'minimum_should_match': '4<' + str(percentage) + '%',  # if the number of tokens is less than 4 they are all required
                         }
                     },
                     {
-                        "match": {
-                            "domain": "twitter.com"
+                        'match': {
+                            'domain': 'twitter.com'
                         }
                     }
                 ]
@@ -43,19 +51,46 @@ def make_a_query(text, percentage=60):
     resp = requests.post(BASE_URL, headers = HEADERS, json = query)
     resp_json = json.loads(resp.text)
 
-    print("Total hits: {}".format(resp_json["hits"]["total"]))
+    posts_with_links = [post for post in resp_json['hits']['hits'] if 'expanded_links' in post['_source']]
 
-    with_link = [post for post in resp_json["hits"]["hits"] if "links" in post['_source']]
-    without_link = [post for post in resp_json["hits"]["hits"] if "links" not in post['_source']]
-
-    print("Hits with links: {}".format(len(with_link)))
-    print("Hits without links: {}".format(len(without_link)))
+    print('Total hits: {}'.format(resp_json['hits']['total']))
+    print('Hits with links: {}'.format(len(posts_with_links)))
 
 
-def get_dataframes_dicts(keywords_csv_dir = 'keywords_csvs/', links_csv_dir = 'links_csvs/'):
+    for post in posts_with_links:
+        for url in post['_source']['expanded_links']:
+            try:
+                # get article info
+                article = newspaper.Article(url=url, keep_article_html=True, follow_meta_refresh=True, fetch_images=False, headers={'User-Agent': 'Mozilla/5.0'})
+                article.download()
+                article.parse()
+
+                soup = BeautifulSoup(article.article_html, 'lxml')
+
+                hrefs = [a['href'] for a in soup.find_all('a') if a.has_attr('href')]
+
+                for new_url in hrefs:
+                    new_url = urljoin(article.canonical_link, new_url)
+
+                    response = requests.head(url=new_url, allow_redirects=True, headers={'User-Agent': 'Mozilla/5.0'})
+                    new_url = response.url
+
+                    new_url = new_url.split('?')[0].split('#')[0].strip('/')
+                    new_url = re.sub('https?://(www\.)?', '', new_url)
+
+                    if new_url in news_urls:
+                        print('---------MATCH FOUND!---------')
+                        print(post)
+                        print('------------------------------')
+
+            except:
+                pass
+
+
+def get_dataframes_dicts(keywords_csv_dir = 'keywords_csvs/', urls_csv_dir = 'urls_csvs/'):
 
     keywords_dfs = {}
-    links_dfs = {}
+    urls_dfs = {}
 
     for file in os.listdir(keywords_csv_dir):
         filename = os.fsdecode(file)
@@ -66,27 +101,27 @@ def get_dataframes_dicts(keywords_csv_dir = 'keywords_csvs/', links_csv_dir = 'l
         keywords_dfs[key] = df
 
 
-    for file in os.listdir(links_csv_dir):
+    for file in os.listdir(urls_csv_dir):
         filename = os.fsdecode(file)
-        filepath = os.path.join(links_csv_dir, filename)
+        filepath = os.path.join(urls_csv_dir, filename)
         df = pd.read_csv(filepath)
 
         key = re.sub('\.csv$', '', filename)
-        links_dfs[key] = df
+        urls_dfs[key] = df
 
-    return keywords_dfs, links_dfs
+    return keywords_dfs, urls_dfs
 
 
 if __name__ == '__main__':
 
-    keywords_dict, links_dict = get_dataframes_dicts()
+    keywords_dict, urls_dict = get_dataframes_dicts()
 
     for key in keywords_dict:
         keywords_df = keywords_dict[key]
         keywords_list = keywords_df['Keyword'].tolist()
-        text = ' '.join(keywords_list)
+        query_text = ' '.join(keywords_list[:6])
 
-        links_df = links_dict[key]
-        links_list = links_df['Link'].tolist()
+        urls_df = urls_dict[key]
+        news_urls = urls_df['Url'].tolist()
 
-        make_a_query(text)
+        make_a_query(query_text, news_urls)

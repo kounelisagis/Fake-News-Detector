@@ -6,8 +6,8 @@ import newspaper
 from urllib.parse import urljoin
 
 
-BASE_URL = 'http://epfl.elasticsearch.spinn3r.com/content*/_search'
-BULK_SIZE = 1000
+BASE_URL = 'http://epfl.elasticsearch.spinn3r.com/content*/_search?scroll=1m'
+BULK_SIZE = 100000
 
 SPINN3R_SECRET = os.environ['SPINN3R_SECRET']
 
@@ -48,7 +48,7 @@ def make_a_query(query_text, news_urls, percentage=60):
         }
     }
 
-    resp = requests.post(BASE_URL, headers = HEADERS, json = query)
+    resp = requests.post(BASE_URL, headers = HEADERS, json = query, stream = True)
     resp_json = json.loads(resp.text)
 
     posts_with_links = [post for post in resp_json['hits']['hits'] if 'expanded_links' in post['_source']]

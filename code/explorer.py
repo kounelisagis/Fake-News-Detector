@@ -3,7 +3,10 @@ import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 import newspaper
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
+import pandas as pd
+import os
+import multiprocessing
 
 
 BASE_URL = 'http://epfl.elasticsearch.spinn3r.com/content*/_search?scroll=1m'
@@ -56,8 +59,10 @@ def make_a_query(query_text, news_urls, percentage=60):
     print('Total hits: {}'.format(resp_json['hits']['total']))
     print('Hits with links: {}'.format(len(posts_with_links)))
 
+    results = []
 
     for post in posts_with_links:
+        tweet_url = post['_source']['permalink']
         for url in post['_source']['expanded_links']:
             try:
                 # get article info
@@ -65,26 +70,43 @@ def make_a_query(query_text, news_urls, percentage=60):
                 article.download()
                 article.parse()
 
-                soup = BeautifulSoup(article.article_html, 'lxml')
+                article_domain = list(urlsplit(article.canonical_link))[1]
+                segments = 3 if '.co.' in article_domain else 2
+                article_domain = '.'.join(article_domain.split('.')[-segments:])
 
+                soup = BeautifulSoup(article.article_html, 'lxml')
                 hrefs = [a['href'] for a in soup.find_all('a') if a.has_attr('href')]
 
                 for new_url in hrefs:
                     new_url = urljoin(article.canonical_link, new_url)
 
-                    response = requests.head(url=new_url, allow_redirects=True, headers={'User-Agent': 'Mozilla/5.0'})
-                    new_url = response.url
+                    new_urls_parts = list(urlsplit(new_url))
 
-                    new_url = new_url.split('?')[0].split('#')[0].strip('/')
-                    new_url = re.sub('https?://(www\.)?', '', new_url)
+                    if new_urls_parts[2] == '/':
+                        continue
+
+                    url_domain = new_urls_parts[1]
+                    segments = 3 if '.co.' in url_domain else 2
+                    url_domain = '.'.join(url_domain.split('.')[-segments:])
+
+                    if article_domain != url_domain:
+                        response = requests.head(url=new_url, allow_redirects=True, headers={'User-Agent': 'Mozilla/5.0'})
+                        new_url = response.url
+
+                    url = list(urlsplit(new_url))
+                    new_url = url[1] + url[2]
+                    new_url = re.sub('^(www\.)', '', new_url.strip('/'))
 
                     if new_url in news_urls:
                         print('---------MATCH FOUND!---------')
-                        print(post)
+                        print((tweet_url, article.canonical_link, new_url, ))
+                        results.append((tweet_url, article.canonical_link, new_url, ))
                         print('------------------------------')
 
             except:
                 pass
+
+    return pd.DataFrame(results)
 
 
 def get_dataframes_dicts(keywords_csv_dir = 'keywords_csvs/', urls_csv_dir = 'urls_csvs/'):
@@ -112,16 +134,32 @@ def get_dataframes_dicts(keywords_csv_dir = 'keywords_csvs/', urls_csv_dir = 'ur
     return keywords_dfs, urls_dfs
 
 
+def query_task(key_keywords):
+    key = key_keywords[0]
+    print(key)
+    keywords_df = key_keywords[1]
+    keywords_list = keywords_df['Keyword'].tolist()
+    query_text = ' '.join(keywords_list[:6])
+
+    urls_df = urls_dict[key]
+    news_urls = urls_df['Url'].tolist()
+
+    df = make_a_query(query_text, news_urls)
+    print(df)
+
+    df = pd.DataFrame(df, columns=['twitter', 'news', 'cdc'])
+    results_csv_dir = 'results_csvs/'
+    os.makedirs(os.path.dirname(results_csv_dir), exist_ok=True)
+
+    fullname = os.path.join(results_csv_dir, str(key) + '.csv')
+    df.to_csv(fullname)
+
+
+
 if __name__ == '__main__':
 
     keywords_dict, urls_dict = get_dataframes_dicts()
 
-    for key in keywords_dict:
-        keywords_df = keywords_dict[key]
-        keywords_list = keywords_df['Keyword'].tolist()
-        query_text = ' '.join(keywords_list[:6])
+    with multiprocessing.Pool() as p:
+        p.map(query_task, keywords_dict.items())
 
-        urls_df = urls_dict[key]
-        news_urls = urls_df['Url'].tolist()
-
-        make_a_query(query_text, news_urls)

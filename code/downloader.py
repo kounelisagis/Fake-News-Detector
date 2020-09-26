@@ -6,7 +6,7 @@ import string
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 import os
 import pandas as pd
 import spacy
@@ -18,14 +18,28 @@ nlp = spacy.load('en_core_web_lg')
 nltk.download('stopwords')
 
 
+def clean_urls(urls):
+    '''Removes protocol + www + parameters + fragments + trailing slash from urls.
+    Returns the list of urls.
+    '''
+    for i in range(len(urls)):
+        url = list(urlsplit(urls[i]))
+        urls[i] = url[1] + url[2]
+        urls[i] = re.sub('^(www\.)', '', urls[i].strip('/'))
+
+    # remove duplicates in urls list
+    urls = list(set(urls))
+
+    return urls
+
+
 def get_keywords_and_urls(url):
     '''Collects the titles of the news that mention the paper given.
     Returns a frequency Pandas Dataframe of the words that constitute the tiles and the urls of the news.
     '''
     titles = []
     keywords = defaultdict(int)
-
-    urls = [re.sub('https?://(www\.)?', '', url.split('?')[0].split('#')[0].strip('/'))]
+    urls = [url]
 
     # get the cdc title
     r = requests.get(url = url)
@@ -61,18 +75,11 @@ def get_keywords_and_urls(url):
             session = requests.Session()
             resp = session.head(url, allow_redirects=True, timeout=(10, 20), headers={'User-Agent': 'Mozilla/5.0'})
 
-            # remove parameters from urls
-            url = resp.url.split('?')[0].split('#')[0].strip('/')
-            url = re.sub('https?://(www\.)?', '', url)
-
-            urls.append(url)
+            urls.append(resp.url)
         except:
             pass
 
-
-    # remove duplicates in urls list
-    urls = list(set(urls))
-
+    urls = clean_urls(urls)
 
     for title in titles + [cdc_title]:
         try:
@@ -137,7 +144,6 @@ def paper_task(paper):
     '''The function that every process executes.
     Responsible for saving the csv files containing the desirable keywords and urls.
     '''
-
     try:
         print('-----------------------------------')
         print('-> {} | {}'.format(multiprocessing.current_process(), paper['title']))

@@ -75,7 +75,7 @@ def make_a_query(query_text, news_urls, percentage=60):
                 article_domain = '.'.join(article_domain.split('.')[-segments:])
 
                 soup = BeautifulSoup(article.article_html, 'lxml')
-                hrefs = [a['href'] for a in soup.find_all('a') if a.has_attr('href')]
+                hrefs = [a['href'] for a in soup.find_all('a') if a.has_attr('href') and 'mailto' not in a['href']]
 
                 for new_url in hrefs:
                     new_url = urljoin(article.canonical_link, new_url)

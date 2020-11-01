@@ -11,7 +11,7 @@ import os
 import pandas as pd
 import spacy
 from fuzzywuzzy import fuzz
-import multiprocessing
+from threading import Thread, get_ident
 
 
 nlp = spacy.load('en_core_web_lg')
@@ -20,7 +20,7 @@ nltk.download('stopwords')
 
 def clean_urls(urls):
     '''Removes protocol + www + parameters + fragments + trailing slash from urls.
-    Returns the list of urls.
+    Returns the list of unique urls.
     '''
     for i in range(len(urls)):
         url = list(urlsplit(urls[i]))
@@ -33,36 +33,14 @@ def clean_urls(urls):
     return urls
 
 
-def get_keywords_and_urls(url):
-    '''Collects the titles of the news that mention the paper given.
-    Returns a frequency Pandas Dataframe of the words that constitute the tiles and the urls of the news.
+def get_titles_and_urls(url, title):
+    '''Requires the urls of the Altmetric news that mention the paper given and the title of the paper.
+    Returns the tiles and the urls of the news.
     '''
-    titles = []
-    keywords = defaultdict(int)
+    titles = [title]
     urls = [url]
 
-    # get the cdc title
-    r = requests.get(url = url)
-    soup = BeautifulSoup(r.content, 'lxml')
-    cdc_title = soup.find(class_='content').find('h1').text.strip()
-
-
-    # get the altmetric details url
-    api_url = 'https://api.altmetric.com/v1/doi/10.15585/mmwr.'
-    url_end = re.search(r'/ss/(.*?).htm', url).group(1)
-
-    r = requests.get(url = api_url + url_end)
-    if not r:  # check the second version
-        r = requests.get(url = api_url + 'ss.' + url_end[2:])
-        if not r:
-            return None
-
-    data = r.json()
-
-
     # get html of altmetric news page
-    url = data['details_url'].replace('.php?citation_id=', '/') + '/news'
-    url = url.replace('www', 'cdc')
     r = requests.get(url)
     soup = BeautifulSoup(r.content, 'lxml')
 
@@ -74,53 +52,47 @@ def get_keywords_and_urls(url):
             # find expanded url
             session = requests.Session()
             resp = session.head(url, allow_redirects=True, timeout=(10, 20), headers={'User-Agent': 'Mozilla/5.0'})
-
             urls.append(resp.url)
         except:
             pass
 
     urls = clean_urls(urls)
 
-    for title in titles + [cdc_title]:
+    return titles, pd.DataFrame(urls)
+
+
+def get_keywords(titles):
+    '''Requires the titles of the Altmetric news that mention the paper given.
+    Returns a frequency Dataframe.
+    '''
+    keywords = defaultdict(int)
+
+    for title in titles:
         try:
             doc = nlp(title)
-            tokens = []
+            tokens = [token.text.lower() for token in doc if not token.is_stop and not token.is_punct and token.is_alpha]
 
-            for chunk in doc.noun_chunks:
-                for word in chunk.text.split():
-                    tokens.append(word)
+            for token in tokens:
+                keywords[token] += 1
 
-            # convert to lower case
-            tokens = [w.lower() for w in tokens]
-            # remove punctuation from each word
-            table = str.maketrans('', '', string.punctuation)
-            stripped = [w.translate(table) for w in tokens]
-            # remove remaining tokens that are not alphabetic
-            words = [word for word in stripped if word.isalpha()]
-            # filter out stop words
-            stop_words = set(stopwords.words('english'))
-            words = [w for w in words if not w in stop_words]
-
-            for w in words:
-                keywords[w] += 1
-
-            # merge words (used for cases like plural)
-            for word1 in list(keywords):
-                for word2 in list(keywords):
-                    if word1 in keywords and word1 != word2 and fuzz.ratio(word1, word2) > 80:
-                        keywords[word1] += keywords[word2]
-                        del keywords[word2]
+            # merge words which are close (used for cases like plural)
+            for keyword1 in list(keywords):
+                for keyword2 in list(keywords):
+                    if keyword1 in keywords and keyword1 != keyword2 and fuzz.ratio(keyword1, keyword2) > 80:
+                        large = keyword1 if len(keyword1) > len(keyword2) else keyword2
+                        small = keyword1 if large == keyword2 else keyword2
+                        keywords[small] += keywords[large]
+                        del keywords[large]
 
         except Exception as e:
             print(e)
 
-
-    return url_end, pd.DataFrame.from_dict(keywords, orient='index', columns=['Appearances']), pd.DataFrame(urls)
+    return pd.DataFrame.from_dict(keywords, orient='index', columns=['Appearances'])
 
 
 def get_cdc_mmwr_papers(url):
     '''Collects the papers included in a CDC Morbidity and Mortality Weekly Report.
-    Returns a dictionary of tiles and urls.
+    Returns a list of tiles and urls.
     '''
     papers = []
 
@@ -131,10 +103,22 @@ def get_cdc_mmwr_papers(url):
     a_tags = content_div.find_all('a')
 
     for a_tag in a_tags:
-        text = a_tag.get_text()
-        url = urljoin('https://www.cdc.gov/', a_tag['href'])
+        # get the altmetric details url
+        api_url = 'https://api.altmetric.com/v1/doi/10.15585/mmwr.'
+        url_end = re.search(r'/ss/(.*?).htm', a_tag['href']).group(1)
 
-        new_paper = {'title': text, 'url': url}
+        r = requests.get(url = api_url + url_end)
+        if not r:  # if fail check the second url version
+            r = requests.get(url = api_url + 'ss.' + url_end[2:])
+            if not r:
+                continue
+
+        data = r.json()
+        url = data['details_url'].replace('.php?citation_id=', '/') + '/news'
+        url = url.replace('www', 'cdc')
+        title = data['title']
+
+        new_paper = {'title': title, 'url': url, 'filename': url_end}
         papers.append(new_paper)
 
     return papers
@@ -146,15 +130,18 @@ def paper_task(paper):
     '''
     try:
         print('-----------------------------------')
-        print('-> {} | {}'.format(multiprocessing.current_process(), paper['title']))
+        print('-> {} | {}'.format(get_ident(), paper['title']))
 
-        filename, keywords_df, urls_df = get_keywords_and_urls(paper['url'])
+        filename = paper['filename']
+        titles, urls_df = get_titles_and_urls(paper['url'], paper['title'])
+        keywords_df = get_keywords(titles)
+
         print(keywords_df.size)
 
         if not keywords_df.empty:
 
             # save keywords csv file
-            keywords_df = keywords_df.nlargest(6, 'Appearances')
+            keywords_df = keywords_df.nlargest(10, 'Appearances')
             keywords_df.index.names = ['Keyword']
 
             keywords_csv_dir = 'keywords_csvs/'
@@ -176,7 +163,12 @@ def paper_task(paper):
 
 if __name__ == '__main__':
 
-    papers = get_cdc_mmwr_papers('https://www.cdc.gov/mmwr/indss_2019.html')
+    papers = get_cdc_mmwr_papers('https://www.cdc.gov/mmwr/indss_2020.html')
 
-    with multiprocessing.Pool() as p:
-        p.map(paper_task, papers)
+    threads = [None] * len(papers)
+
+    for i in range(len(threads)):
+        threads[i] = Thread(target=paper_task, args=(papers[i], ))
+        threads[i].start()
+    for i in range(len(threads)):
+        threads[i].join()

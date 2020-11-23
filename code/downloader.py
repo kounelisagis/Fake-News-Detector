@@ -3,13 +3,13 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import string
-import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit
 import os
 import pandas as pd
 import spacy
+import nltk
 from fuzzywuzzy import fuzz
 from threading import Thread, get_ident
 
@@ -19,42 +19,61 @@ nltk.download('stopwords')
 
 
 def clean_urls(urls):
-    '''Removes protocol + www + parameters + fragments + trailing slash from urls.
+    '''Removes protocol + www + parameters (if necessary) + fragments + trailing slash from urls.
     Returns the list of unique urls.
     '''
+
+    r = []
+
     for i in range(len(urls)):
-        url = list(urlsplit(urls[i]))
-        urls[i] = url[1] + url[2]
-        urls[i] = re.sub('^(www\.)', '', urls[i].strip('/'))
+        url = ''
+        url_parts = list(urlsplit(urls[i]))
+        if url_parts[2] == '/':
+            if url_parts[3] == '':
+                continue
+            url = url_parts[1] + url_parts[2] + url_parts[3]
+        else:
+            url = url_parts[1] + url_parts[2]
+
+        url = re.sub('www\.', '', url).strip('/')
+        r.append(url)
 
     # remove duplicates in urls list
-    urls = list(set(urls))
-
-    return urls
+    return list(set(r))
 
 
 def get_titles_and_urls(url, title):
-    '''Requires the urls of the Altmetric news that mention the paper given and the title of the paper.
+    '''Requires the url of the Altmetric news that mention the paper given and the title of the paper.
     Returns the tiles and the urls of the news.
     '''
     titles = [title]
     urls = [url]
 
-    # get html of altmetric news page
-    r = requests.get(url)
-    soup = BeautifulSoup(r.content, 'lxml')
+    next_page = 1
 
-    for paragraph in soup.find_all('article'):
-        titles.append(paragraph.find('h3').text)
-        try:  # a element may be missing
-            url = paragraph.find('a')['href']
+    while next_page != None:
+        r = requests.get(url.replace('www', 'cdc') + '/page:' + str(next_page))
+        print(r.url)
+        soup = BeautifulSoup(r.content, 'lxml')
 
-            # find expanded url
-            session = requests.Session()
-            resp = session.head(url, allow_redirects=True, timeout=(10, 20), headers={'User-Agent': 'Mozilla/5.0'})
-            urls.append(resp.url)
-        except:
-            pass
+        if soup.find_all('a', {'rel': 'next'}):
+            next_page += 1
+        else:
+            next_page = None
+
+        print(next_page)
+
+        for paragraph in soup.find_all('article'):
+            titles.append(paragraph.find('h3').text)
+            try:  # a element may be missing
+                href = paragraph.find('a')['href']
+
+                # find expanded url
+                session = requests.Session()
+                resp = session.head(href, allow_redirects=True, timeout=(10, 20), headers={'User-Agent': 'Mozilla/5.0'})
+                urls.append(resp.url)
+            except:
+                pass
 
     urls = clean_urls(urls)
 
@@ -88,6 +107,18 @@ def get_keywords(titles):
             print(e)
 
     return pd.DataFrame.from_dict(keywords, orient='index', columns=['Appearances'])
+
+
+def get_top_altmetric_100_papers():
+
+    df = pd.read_excel('data/altmetric_top_2019.xlsx')
+    df = df[['Title', 'Details Page URL']]
+    df = df.rename(columns={'Title': 'title', 'Details Page URL': 'url'})
+
+    papers = [{**dictionary, 'url': (dictionary['url'] + '/news'),
+                'filename': dictionary['title'].replace(" ", "_")} for dictionary in df.to_dict('records')]
+
+    return papers
 
 
 def get_cdc_mmwr_papers(url):
@@ -126,7 +157,7 @@ def get_cdc_mmwr_papers(url):
 
 def paper_task(paper):
     '''The function that every process executes.
-    Responsible for saving the csv files containing the desirable keywords and urls.
+    Responsible for saving the csv files containing the desirable urls.
     '''
     try:
         print('-----------------------------------')
@@ -134,28 +165,13 @@ def paper_task(paper):
 
         filename = paper['filename']
         titles, urls_df = get_titles_and_urls(paper['url'], paper['title'])
-        keywords_df = get_keywords(titles)
+        
+        # save urls csv file
+        urls_csv_dir = 'urls_csvs/'
+        os.makedirs(os.path.dirname(urls_csv_dir), exist_ok=True)
 
-        print(keywords_df.size)
-
-        if not keywords_df.empty:
-
-            # save keywords csv file
-            keywords_df = keywords_df.nlargest(10, 'Appearances')
-            keywords_df.index.names = ['Keyword']
-
-            keywords_csv_dir = 'keywords_csvs/'
-            os.makedirs(os.path.dirname(keywords_csv_dir), exist_ok=True)
-
-            fullname = os.path.join(keywords_csv_dir, filename + '.csv')
-            keywords_df.to_csv(fullname)
-
-            # save urls csv file
-            urls_csv_dir = 'urls_csvs/'
-            os.makedirs(os.path.dirname(urls_csv_dir), exist_ok=True)
-
-            fullname = os.path.join(urls_csv_dir, filename + '.csv')
-            urls_df.to_csv(fullname, header = ['Url'], index = False)
+        fullname = os.path.join(urls_csv_dir, filename + '.csv')
+        urls_df.to_csv(fullname, header = ['Url'], index = False)
 
     except Exception as e:
         print(e)
@@ -163,12 +179,15 @@ def paper_task(paper):
 
 if __name__ == '__main__':
 
-    papers = get_cdc_mmwr_papers('https://www.cdc.gov/mmwr/indss_2020.html')
+    papers = get_top_altmetric_100_papers()
+
+    # option 2
+    # papers = get_cdc_mmwr_papers('https://www.cdc.gov/mmwr/indss_2020.html')
 
     threads = [None] * len(papers)
 
-    for i in range(len(threads)):
+    for i in range(len(papers)):
         threads[i] = Thread(target=paper_task, args=(papers[i], ))
         threads[i].start()
-    for i in range(len(threads)):
+    for i in range(len(papers)):
         threads[i].join()

@@ -61,10 +61,10 @@ def make_a_query(news_urls):
             for post in posts_with_links:
                 source = post['_source']
                 tweet_url = source['permalink']
-                publish_date = source['published']
-                likes = source['likes']
-                shares = source['shares']
-                source_followers = source['source_followers']
+                publish_date = source['published'] if 'published' in source else None
+                likes = source['likes'] if 'likes' in source else None
+                shares = source['shares'] if 'shares' in source else None
+                source_followers = source['source_followers'] if 'source_followers' in source else None
                 replied = source['replied'] if 'replied' in source else None
                 sentiment = source['sentiment'] if 'sentiment' in source else None
 
